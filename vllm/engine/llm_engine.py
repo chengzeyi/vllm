@@ -127,7 +127,7 @@ class LLMEngine:
         # List of (timestamp, num_tokens)
         self.num_generation_tokens: List[Tuple[float, int]] = []
 
-        self.pool = ThreadPoolExecutor(max_workers=16)
+        self.pool = ThreadPoolExecutor(max_workers=8)
 
     def _init_workers(self, distributed_init_method: str):
         # Lazy import the Worker to avoid importing torch.cuda/xformers
@@ -266,6 +266,12 @@ class LLMEngine:
         elif len(segments) == 1:
             token_ids = self.tokenizer.encode(segments[0])
         else:
+            def chunks(lst, n):
+                """Yield successive n-sized chunks from lst."""
+                for i in range(0, len(lst), n):
+                    yield lst[i:i + n]
+
+            segments = [''.join(s) for s in chunks(segments, self.pool._max_workers)]
             token_ids = list(self.pool.map(self.tokenizer.encode, segments))
             token_ids = sum(token_ids, [])
         return token_ids
