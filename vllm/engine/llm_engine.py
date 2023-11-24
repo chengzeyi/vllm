@@ -266,12 +266,11 @@ class LLMEngine:
         elif len(segments) == 1:
             token_ids = self.tokenizer.encode(segments[0])
         else:
-            def chunks(lst, n):
-                """Yield successive n-sized chunks from lst."""
-                for i in range(0, len(lst), n):
-                    yield lst[i:i + n]
+            def split(a, n):
+                k, m = divmod(len(a), n)
+                return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
 
-            segments = [''.join(s) for s in chunks(segments, self.pool._max_workers)]
+            segments = [''.join(s) for s in split(segments, self.pool._max_workers)]
             token_ids = list(self.pool.map(self.tokenizer.encode, segments))
             token_ids = sum(token_ids, [])
         return token_ids
