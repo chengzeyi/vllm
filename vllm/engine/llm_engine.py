@@ -3,6 +3,9 @@ import time
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Union
 
+from concurrent.futures import ThreadPoolExecutor
+import re
+
 from vllm.config import (CacheConfig, ModelConfig, ParallelConfig,
                          SchedulerConfig)
 from vllm.core.scheduler import Scheduler, SchedulerOutputs
@@ -29,6 +32,8 @@ logger = init_logger(__name__)
 
 _LOGGING_INTERVAL_SEC = 5
 
+# Chinese punctuation
+SEP_PATTERN = re.compile(r"([\n\r,;，。；]+)")
 
 class LLMEngine:
     """An LLM engine that receives requests and generates texts.
@@ -121,6 +126,8 @@ class LLMEngine:
         self.num_prompt_tokens: List[Tuple[float, int]] = []
         # List of (timestamp, num_tokens)
         self.num_generation_tokens: List[Tuple[float, int]] = []
+
+        self.pool = ThreadPoolExecutor(max_workers=16)
 
     def _init_workers(self, distributed_init_method: str):
         # Lazy import the Worker to avoid importing torch.cuda/xformers
@@ -246,6 +253,23 @@ class LLMEngine:
                      log_stats=not engine_args.disable_log_stats)
         return engine
 
+    def tokenizer_encode(self, text: str) -> List[int]:
+        """Encodes the text using the tokenizer."""
+        segments = SEP_PATTERN.split(text)
+        new_segments = []
+        for a, b in zip(segments[::2], segments[1::2]):
+            new_segments.append(a + b)
+        segments = new_segments
+        segments = [s for s in segments if len(s) > 0]
+        if len(segments) == 0:
+            token_ids = []
+        elif len(segments) == 1:
+            token_ids = self.tokenizer.encode(segments[0])
+        else:
+            token_ids = list(self.pool.map(self.tokenizer.encode, segments))
+            token_ids = sum(token_ids, [])
+        return token_ids
+
     def add_request(
         self,
         request_id: str,
@@ -274,7 +298,8 @@ class LLMEngine:
             arrival_time = time.monotonic()
         if prompt_token_ids is None:
             assert prompt is not None
-            prompt_token_ids = self.tokenizer.encode(prompt)
+            # prompt_token_ids = self.tokenizer.encode(prompt)
+            prompt_token_ids = self.tokenizer_encode(prompt)
 
         # Create the sequences.
         block_size = self.cache_config.block_size
